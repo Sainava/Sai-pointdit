@@ -174,3 +174,8 @@ results/
 logs/
 tmp/
 third_party/dinov3/
+
+
+# Added for this project 
+.DS_Store
+KAGGLE_RUN_NOTES.md
