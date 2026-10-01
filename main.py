@@ -830,6 +830,19 @@ def main(args):
             model_without_ddp.ema_params2 = None
             print('No EMA weights in checkpoint ({}); evaluating the "model" weights directly.'
                   .format(checkpoint.get('extracted_from', 'slim checkpoint')))
+        elif args.evaluate_gen:
+            # Inference only: write the EMA weights straight into the model instead of keeping
+            # GPU copies for the engine to swap in (and back) -- those copies, of the frozen
+            # DINOv3 encoder too, take ~4x the model size and do not fit on a 16 GB GPU.
+            # Same result as the swap below: parameters missing from 'model_ema1' (the
+            # stripped encoder) keep the weights loaded above.
+            if not args.eval_no_ema:
+                param_names = {name for name, _ in model_without_ddp.named_parameters()}
+                ema_state_dict1 = {k: v for k, v in checkpoint['model_ema1'].items() if k in param_names}
+                model_without_ddp.load_state_dict(ema_state_dict1, strict=False)
+                print('Loaded EMA weights in place for evaluation')
+            model_without_ddp.ema_params1 = None
+            model_without_ddp.ema_params2 = None
         else:
             ema_params1 = copy.deepcopy(list(model_without_ddp.parameters()))
             ema_params2 = copy.deepcopy(list(model_without_ddp.parameters()))
