@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PLY Viewer</title>
+<!--
+  Local point-cloud viewer for PointDiT outputs (generation/**/*_pointcloud.ply).
+  Open this file in Chrome/Safari and drag .ply files onto the page. Files are read in the
+  browser and never uploaded; only three.js itself is fetched from the CDN.
+-->
+<style>
+  :root {
+    --bg: #111318; --panel: #1b1e25; --border: #2c313b; --text: #e6e8ec; --muted: #9aa1ad;
+    --accent: #f3a83b; --active: #2a2f3a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; overflow: hidden; }
+  #app { display: flex; height: 100%; }
+  #side { width: 280px; flex: none; background: var(--panel); border-right: 1px solid var(--border);
+    display: flex; flex-direction: column; overflow: hidden; }
+  #side h1 { font-size: 14px; margin: 14px 14px 4px; }
+  #side .sub { color: var(--muted); margin: 0 14px 10px; font-size: 12px; }
+  .section { padding: 10px 14px; border-top: 1px solid var(--border); }
+  .section label { display: block; color: var(--muted); margin-bottom: 4px; font-size: 12px; }
+  button, select { background: var(--active); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 10px; font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; }
+  .seg button.on { border-color: var(--accent); color: var(--accent); }
+  input[type=range] { width: 100%; }
+  #files { flex: 1; overflow-y: auto; padding: 4px 0; }
+  #files div { padding: 6px 14px; cursor: pointer; white-space: nowrap; overflow: hidden;
+    text-overflow: ellipsis; color: var(--muted); }
+  #files div:hover { color: var(--text); }
+  #files div.on { background: var(--active); color: var(--text); border-left: 3px solid var(--accent);
+    padding-left: 11px; }
+  #info { color: var(--muted); font-size: 12px; white-space: pre-line; }
+  #main { flex: 1; position: relative; }
+  #canvas { position: absolute; inset: 0; }
+  #drop { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    pointer-events: none; }
+  #drop .box { border: 2px dashed var(--border); border-radius: 14px; padding: 36px 44px; text-align: center;
+    color: var(--muted); max-width: 460px; }
+  #drop .box b { color: var(--text); font-size: 15px; display: block; margin-bottom: 6px; }
+  #drop.hidden { display: none; }
+  body.dragging #drop { display: flex !important; background: rgba(243, 168, 59, .08); }
+  body.dragging #drop .box { border-color: var(--accent); }
+  #help { position: absolute; right: 12px; bottom: 10px; color: var(--muted); font-size: 12px;
+    background: rgba(17, 19, 24, .75); padding: 6px 10px; border-radius: 6px; }
+  #legend { position: absolute; left: 12px; bottom: 10px; font-size: 12px; color: var(--muted);
+    background: rgba(17, 19, 24, .75); padding: 6px 10px; border-radius: 6px; display: none; }
+  #legend .bar { width: 160px; height: 8px; border-radius: 4px; margin: 4px 0 2px;
+    background: linear-gradient(90deg, #f0f921, #fca636, #e16462, #b12a90, #6a00a8, #0d0887); }
+  #legend .ends { display: flex; justify-content: space-between; }
+  #loading { position: absolute; top: 12px; left: 50%; transform: translateX(-50%); display: none;
+    background: var(--panel); border: 1px solid var(--border); padding: 6px 12px; border-radius: 6px; }
+  @media (max-width: 700px) {
+    #app { flex-direction: column; }
+    #side { width: 100%; height: 42%; border-right: 0; border-bottom: 1px solid var(--border); }
+  }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="app">
+  <aside id="side">
+    <h1>PLY Viewer</h1>
+    <p class="sub">PointDiT point clouds. Files stay on your computer.</p>
+    <div class="section">
+      <div class="row">
+        <button id="open">Open .ply files…</button>
+        <input id="picker" type="file" accept=".ply" multiple hidden>
+      </div>
+    </div>
+    <div class="section">
+      <label>Colour</label>
+      <div class="row seg" id="colorMode">
+        <button data-mode="rgb" class="on">Photo</button>
+        <button data-mode="depth">Depth</button>
+      </div>
+    </div>
+    <div class="section">
+      <label>Point size <span id="sizeVal"></span></label>
+      <input id="size" type="range" min="0.2" max="6" step="0.1" value="2">
+    </div>
+    <div class="section">
+      <label>View</label>
+      <div class="row">
+        <button id="viewCam" title="R">Camera view</button>
+        <button id="viewTop" title="T">Top</button>
+        <button id="viewSide" title="S">Side</button>
+      </div>
+    </div>
+    <div class="section"><div id="info">No file loaded.</div></div>
+    <div class="section" style="padding-bottom:4px"><label>Files (↑/↓ to switch)</label></div>
+    <div id="files"></div>
+  </aside>
+  <main id="main">
+    <div id="canvas"></div>
+    <div id="drop"><div class="box"><b>Drop .ply files here</b>
+      e.g. everything in <code>generation/…/Booster_subset/</code>.<br>
+      You can drop many at once and switch between them on the left.</div></div>
+    <div id="legend"><div class="ends"><span>near</span><span>far</span></div><div class="bar"></div></div>
+    <div id="loading">Loading…</div>
+    <div id="help">Drag: rotate · Right-drag / Shift-drag: pan · Scroll: zoom · R: reset</div>
+  </main>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { PLYLoader } from 'three/addons/loaders/PLYLoader.js';
+
+const $ = (id) => document.getElementById(id);
+const container = $('canvas');
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setClearColor(0x111318);
+container.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, 1, 0.001, 1e6);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.screenSpacePanning = true;
+
+const material = new THREE.PointsMaterial({ size: 2, vertexColors: true, sizeAttenuation: false });
+let points = null;          // current THREE.Points
+let current = -1;           // index into entries
+const entries = [];         // { name, file, geometry?, rgb?, depthColors?, stats? }
+let colorMode = 'rgb';
+
+function resize() {
+  const { clientWidth: w, clientHeight: h } = container;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+// --- colour maps -----------------------------------------------------------------------
+// Plasma, matching the repo's *_depth.png (near = yellow, far = dark blue/purple).
+const PLASMA = [[0.940, 0.975, 0.131], [0.988, 0.651, 0.212], [0.881, 0.393, 0.383],
+                [0.694, 0.165, 0.565], [0.416, 0.000, 0.659], [0.050, 0.030, 0.528]];
+function plasma(t) {
+  t = Math.min(1, Math.max(0, t)) * (PLASMA.length - 1);
+  const i = Math.min(PLASMA.length - 2, Math.floor(t)), f = t - i;
+  const a = PLASMA[i], b = PLASMA[i + 1];
+  return [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
+}
+
+function percentile(sorted, p) { return sorted[Math.min(sorted.length - 1, Math.floor(p * sorted.length))]; }
+
+// Depth = distance along the viewing direction. PointDiT writes OpenGL coordinates
+// (Y up, camera looking down -Z), so larger depth is more negative z.
+function buildDepthColors(pos) {
+  const n = pos.count, z = new Float32Array(n);
+  for (let i = 0; i < n; i++) z[i] = -pos.getZ(i);
+  const step = Math.max(1, Math.floor(n / 50000));
+  const sample = [];
+  for (let i = 0; i < n; i += step) sample.push(z[i]);
+  sample.sort((a, b) => a - b);
+  const lo = percentile(sample, 0.02), hi = percentile(sample, 0.98), span = (hi - lo) || 1;
+  const col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const c = plasma((z[i] - lo) / span);
+    col[3 * i] = c[0]; col[3 * i + 1] = c[1]; col[3 * i + 2] = c[2];
+  }
+  return new THREE.BufferAttribute(col, 3);
+}
+
+// Robust bounds (ignore the 1% extremes so stray points don't shrink the view).
+function robustStats(pos) {
+  const n = pos.count, step = Math.max(1, Math.floor(n / 50000));
+  const xs = [], ys = [], zs = [];
+  for (let i = 0; i < n; i += step) { xs.push(pos.getX(i)); ys.push(pos.getY(i)); zs.push(pos.getZ(i)); }
+  const r = (a) => { a.sort((p, q) => p - q); return [percentile(a, 0.01), percentile(a, 0.99)]; };
+  const [x0, x1] = r(xs), [y0, y1] = r(ys), [z0, z1] = r(zs);
+  const center = new THREE.Vector3((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2);
+  const size = new THREE.Vector3(x1 - x0, y1 - y0, z1 - z0);
+  return { center, size, radius: Math.max(size.x, size.y, size.z) / 2 || 1 };
+}
+
+// --- views -----------------------------------------------------------------------------
+function setView(kind) {
+  const e = entries[current];
+  if (!e || !e.stats) return;
+  const { center, size, radius } = e.stats;
+  const fov = THREE.MathUtils.degToRad(camera.fov);
+  const fit = (Math.max(size.x / camera.aspect, size.y) / 2) / Math.tan(fov / 2);
+  const dist = Math.max(fit * 1.15, radius * 0.5);
+  camera.up.set(0, 1, 0);
+  if (kind === 'top') {
+    camera.position.set(center.x, center.y + dist * 1.6, center.z + 1e-3);
+    camera.up.set(0, 0, -1);
+  } else if (kind === 'side') {
+    camera.position.set(center.x + dist * 1.6, center.y, center.z);
+  } else {
+    // camera view: look down -Z from in front of the cloud, like the original photo
+    camera.position.set(center.x, center.y, center.z + size.z / 2 + dist);
+  }
+  camera.near = radius / 1000; camera.far = radius * 1000;
+  camera.updateProjectionMatrix();
+  controls.target.copy(center);
+  controls.update();
+}
+
+// --- loading ---------------------------------------------------------------------------
+const loader = new PLYLoader();
+
+async function show(index) {
+  if (index < 0 || index >= entries.length) return;
+  current = index;
+  const e = entries[index];
+  [...$('files').children].forEach((el, i) => el.classList.toggle('on', i === index));
+  if (!e.geometry) {
+    $('loading').style.display = 'block';
+    try {
+      const buf = await e.file.arrayBuffer();
+      const g = loader.parse(buf);
+      if (!g.attributes.color) {   // no colours in file: fall back to grey
+        const c = new Float32Array(g.attributes.position.count * 3).fill(0.8);
+        g.setAttribute('color', new THREE.BufferAttribute(c, 3));
+      }
+      e.geometry = g;
+      e.rgb = g.attributes.color;
+      e.stats = robustStats(g.attributes.position);
+    } catch (err) {
+      $('loading').style.display = 'none';
+      $('info').textContent = `Could not read ${e.name}:\n${err.message}`;
+      return;
+    }
+    $('loading').style.display = 'none';
+  }
+  if (points) scene.remove(points);
+  applyColor(e);
+  points = new THREE.Points(e.geometry, material);
+  scene.add(points);
+  $('drop').classList.add('hidden');
+  const s = e.stats.size;
+  const isEval = /^\d{5}_/.test(e.name);
+  $('info').textContent =
+    `${e.name}\n${e.geometry.attributes.position.count.toLocaleString()} points\n` +
+    `extent  x ${s.x.toFixed(2)}  y ${s.y.toFixed(2)}  z ${s.z.toFixed(2)}\n` +
+    (isEval ? 'Evaluation file: LEFT = prediction, RIGHT = ground truth.'
+            : 'Relative units (no real-world scale).');
+  setView('camera');
+}
+
+function applyColor(e) {
+  if (colorMode === 'depth') {
+    if (!e.depthColors) e.depthColors = buildDepthColors(e.geometry.attributes.position);
+    e.geometry.setAttribute('color', e.depthColors);
+  } else {
+    e.geometry.setAttribute('color', e.rgb);
+  }
+  $('legend').style.display = colorMode === 'depth' ? 'block' : 'none';
+}
+
+function addFiles(fileList) {
+  const files = [...fileList].filter((f) => f.name.toLowerCase().endsWith('.ply'));
+  if (!files.length) return;
+  files.sort((a, b) => a.name.localeCompare(b.name));
+  const first = entries.length;
+  for (const f of files) {
+    entries.push({ name: f.name, file: f });
+    const el = document.createElement('div');
+    el.textContent = f.name;
+    const idx = entries.length - 1;
+    el.onclick = () => show(idx);
+    $('files').appendChild(el);
+  }
+  show(first);
+}
+
+// --- UI wiring -------------------------------------------------------------------------
+$('open').onclick = () => $('picker').click();
+$('picker').onchange = (ev) => { addFiles(ev.target.files); ev.target.value = ''; };
+
+let dragDepth = 0;
+window.addEventListener('dragenter', (ev) => { ev.preventDefault(); dragDepth++; document.body.classList.add('dragging'); });
+window.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragging'); } });
+window.addEventListener('dragover', (ev) => ev.preventDefault());
+window.addEventListener('drop', (ev) => {
+  ev.preventDefault(); dragDepth = 0; document.body.classList.remove('dragging');
+  addFiles(ev.dataTransfer.files);
+});
+
+$('colorMode').onclick = (ev) => {
+  const b = ev.target.closest('button'); if (!b) return;
+  colorMode = b.dataset.mode;
+  [...$('colorMode').children].forEach((x) => x.classList.toggle('on', x === b));
+  if (entries[current]?.geometry) applyColor(entries[current]);
+};
+
+const sizeInput = $('size');
+const updateSize = () => { material.size = +sizeInput.value; $('sizeVal').textContent = `(${sizeInput.value})`; };
+sizeInput.oninput = updateSize; updateSize();
+
+$('viewCam').onclick = () => setView('camera');
+$('viewTop').onclick = () => setView('top');
+$('viewSide').onclick = () => setView('side');
+
+window.addEventListener('keydown', (ev) => {
+  if (ev.target.tagName === 'INPUT') return;
+  const k = ev.key.toLowerCase();
+  if (k === 'r') setView('camera');
+  else if (k === 't') setView('top');
+  else if (k === 's') setView('side');
+  else if (k === 'd') $('colorMode').children[colorMode === 'rgb' ? 1 : 0].click();
+  else if (ev.key === 'ArrowDown') { ev.preventDefault(); show(Math.min(entries.length - 1, current + 1)); }
+  else if (ev.key === 'ArrowUp') { ev.preventDefault(); show(Math.max(0, current - 1)); }
+  else if (k === '+' || k === '=') { sizeInput.value = +sizeInput.value + 0.3; updateSize(); }
+  else if (k === '-') { sizeInput.value = +sizeInput.value - 0.3; updateSize(); }
+});
+
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+</script>
+</body>
+</html>
